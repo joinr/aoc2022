@@ -119,6 +119,23 @@
 ;;So we have expanding rings of candidates that we can explore in order
 ;;to exhaustively find the best vantage in a breadth first fashion.
 
+(defn directions [x y]
+  {:left  [(dec x)  y]
+   :up    [x       (inc y)]
+   :right [(inc x)  y]
+   :down  [x       (dec y)]})
 
+(defn breadth-neighbors [from x y]
+  (dissoc (directions x y) from))
 
+;; (defn optimal-order [rows]
+;;   (let [m (count rows)
+;;         n (count (first rows))]
+;;     (iterate (fn [xs]
+;;                (for [[from [x y]] xs]
+;;                  (case from
+;;                    :left
+;;                    :up
+;;                    :right
+;;                    :down  ))
 
