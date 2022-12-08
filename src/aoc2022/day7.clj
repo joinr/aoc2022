@@ -151,4 +151,5 @@ $ ls
 (defn solve-7b []
   (->> (bigger-than (needed big) big)
        (sort-by :size)
-       first))
+       first
+       :size))
