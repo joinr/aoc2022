@@ -1,5 +1,6 @@
 (ns aoc2022.day8
-  (:require [clojure.java.io :as io]))
+  (:require [clojure.java.io :as io]
+            [aoc2022.utils :as u]))
 
 (def sample
 "30373
@@ -119,23 +120,142 @@
 ;;So we have expanding rings of candidates that we can explore in order
 ;;to exhaustively find the best vantage in a breadth first fashion.
 
-(defn directions [x y]
-  {:left  [(dec x)  y]
-   :up    [x       (inc y)]
-   :right [(inc x)  y]
-   :down  [x       (dec y)]})
+(defn assoc-some [m k v]
+  (if v
+    (assoc m k v)
+    m))
 
-(defn breadth-neighbors [from x y]
-  (dissoc (directions x y) from))
+(defn directions [xmin xmax ymin ymax x y]
+  (-> {}
+      (assoc-some :left  (when (> x xmin) [(dec x)  y]))
+      (assoc-some :up    (when (< y ymax) [x       (inc y)]))
+      (assoc-some :right (when (< x xmax) [(inc x)  y]))
+      (assoc-some :down  (when (> y ymin) [x       (dec y)]))))
 
-;; (defn optimal-order [rows]
-;;   (let [m (count rows)
-;;         n (count (first rows))]
-;;     (iterate (fn [xs]
-;;                (for [[from [x y]] xs]
-;;                  (case from
-;;                    :left
-;;                    :up
-;;                    :right
-;;                    :down  ))
+(defn breadth-neighbors [from xmin xmax ymin ymax x y]
+  (dissoc (directions xmin xmax ymin ymax x y) ({:left :right
+                                                 :up :down} from)))
+
+(defn optimal-order [rows]
+  (let [n (count rows)
+        xmin 0
+        xmax (dec n)
+        ymin 0
+        ymax (dec n)
+        k    (+ xmin (quot n 2))
+        as-idx   (fn [x y] (u/xy->idx n n x y ))
+        as-xy    (fn [idx] (u/idx->xy n n idx))
+        known    (atom #{(as-idx k k)})
+        open?    (fn [x y]
+                   (let [idx (as-idx x y)]
+                     (when (not (@known idx))
+                       (do (swap! known conj idx)
+                           true))))
+       ]
+    (->> (iterate (fn [xs]
+                    (apply concat
+                           (for [[from [x y]] xs]
+                             (do (swap! known conj (as-idx x y))
+                                 (->> (breadth-neighbors from xmin xmax ymin ymax x y)
+                                      (filter (fn [[_ [x y]]] (open? x y))))))))
+                  [[:middle [k k]]])
+         (take-while seq)
+         (apply concat)
+         (map second))))
+
+(defn view-order [rows xs]
+  (reduce (fn [acc [idx [x y]]]
+            (assoc-in acc [x y] idx))
+          rows
+          (map-indexed vector xs)))
+
+(comment
+[22 14  5 13  21]
+[16  7  1  6  15]
+[12  4  0  2   8]
+[20 11  3  9  17]
+[24 19 10 18  23])
+
+;;now need to define linear scan for visibility from [x y]...
+
+(defn horizontal [xmin xmax x]
+  [(range (inc x) (inc xmax))
+   (range (dec x) (dec xmin) -1)])
+
+(defn vertical   [ymin ymax y]
+  [(range (inc y) (inc ymax))
+   (range (dec y) (dec ymin) -1)])
+
+(defn scorex [xy->v v y xs]
+  (reduce (fn [acc x]
+            (let [nxt (unchecked-inc acc)]
+              (if (< (xy->v x y) v)
+                nxt
+                (reduced nxt))))
+          0 xs))
+
+(defn scorey [xy->v v x ys]
+  (reduce (fn [acc y]
+            (let [nxt (unchecked-inc acc)]
+              (if (< (xy->v x y) v)
+                nxt
+                (reduced nxt))))
+          0 ys))
+
+(defn ->scorer [rows xmin xmax ymin ymax]
+  (let [xy->v (fn [x y] (get-in rows [y x]))]
+    (fn [x y]
+      (let [v     (xy->v x y)
+            [l r] (horizontal xmin xmax x)
+            [u d] (vertical   ymin ymax y)
+            sl (scorex xy->v v y l)
+            sr (scorex xy->v v y r)
+            su (scorey xy->v v x u)
+            sd (scorey xy->v v x d)
+            ]
+        (* sl sr su sd)))))
+
+(defn max-possible [xmin xmax ymin ymax x y]
+  (let [l (- x xmin)
+        r (- xmax x)
+        u (- ymax y)
+        d (- y ymin)]
+    (* l r u d)))
+
+(defn solve-8b []
+  (let [big (->> (io/resource "day8input.txt")
+                 slurp
+                 parse)
+        n   (count big)
+        xmax (dec n)
+        ymax xmax
+        scr (->scorer big 0 xmax 0 ymax)]
+    (->> (optimal-order big)
+         (reduce (fn [[best xy :as acc] [x y]]
+                   (let [mx (max-possible 0 xmax 0 ymax x y)]
+                     (if (> best mx)
+                       ;;best found is better than max possible
+                       ;;going fwd, stop.
+                       (reduced [best xy])
+                       (let [v (scr x y)]
+                         (if (= v max-possible) ;;can't do better.
+                           (reduced [v [x y]])
+                           (if (< best v)
+                             [v [x y]]
+                             acc))))))
+                 [0 nil]))))
+
+(defn brute []
+  (let [big (->> (io/resource "day8input.txt")
+                 slurp
+                 parse)
+        n   (count big)
+        xmax (dec n)
+        ymax xmax
+        scr (->scorer big 0 xmax 0 ymax)]
+    (->> (for [x (range n)
+               y (range n)]
+           [(scr x y) x y])
+         (apply max-key first))))
+
 
