@@ -29,25 +29,26 @@ addx -5")
 ;; ;;if pending completed, apply them to the state prior to new ops.
 ;;add new ops to the pending.
 
-;;wait-time is how long to wait for the next instruction.
-(defn step [{:keys [t state] :as env} op dt]
-    (let [tnxt (unchecked-inc t)]
-      (if (and (pos? t) (empty? new-pending))
-        (reduced (assoc env :t tnxt :state new-state :pending {}))
-        ;;push instruction onto the queue.
-        (assoc env
-               :t       tnxt
-               :state   new-state
-               :pending (if dt
-                          (update new-pending dt
-                                  (fn [coll] (conj (or coll []) mv)))
-                          ;;execute.
-                          new-pending)))))
+;;instructions correspond to adding time and modifying state.
+(defn step [{:keys [t state] :as env} ops]
+  (when-let [op (first ops)]
+    (let [dt        (-> op first cycles)
+          new-env   (-> env
+                        (assoc  :t (+ t dt)
+                                :state (do-op state op)))]
+      (lazy-seq
+       (cons new-env (step new-env (rest ops)))))))
 
-(defn process [init xs]
-  (reductions step init (concat xs (repeat nil))))
+(defn discrete-values
+  ([init ops]
+   (->> ops
+        (step init)
+        (cons init)
+        (map (fn [s]
+               (update s :t inc)))))
+  ([ops] (discrete-values init ops)))
 
-(def init {:t 0 :state {:x 1} :pending '()})
+(def init {:t 0 :state {:x 1}})
 
 
 (def big-sample
@@ -198,12 +199,88 @@ noop
 noop
 noop")
 
-(defn signal-strength [{:keys [t state]}]
-  (-> state :x (* t)))
+;;we can traverse
+(defn sample-at
+  ([t prev history]
+   (if (= (prev :t) t)
+     [prev history]
+     (if-let [nxt (first history)]
+      (if (> (nxt :t) t)
+        [(assoc prev :t t) history]
+        (recur t nxt (rest history)))
+      [(assoc prev :t t) nil])))
+  ([t history] (sample-at  t (first history) (rest history))))
 
-(defn signal-cycles [mvs]
-  (->> mvs
-       (process init)
-       (drop )
-       (take 1)
-       #_(map signal-strength)))
+(defn signal-samples [n xs]
+  (->> (iterate (fn [[t x history]]
+                  (let [[x nxt] (sample-at t history)]
+                    [(+ t 40) x nxt]))
+                [20 nil xs])
+       (drop 1)
+       (take n)
+       (map second)))
+
+(defn signal-strength [m]
+  (-> m :state :x (* (m :t))))
+
+(defn strengths [n xs]
+  (->> xs
+       (signal-samples n)
+       (map signal-strength)))
+
+(defn total-strength [n xs]
+  (->> xs (strengths n) (reduce +)))
+
+(defn solve-10a []
+  (->> (io/resource "day10input.txt")
+       slurp
+       parse
+       discrete-values
+       (total-strength 6)))
+
+
+;;part 2
+;;we know the x coordinate based on state.
+;;for each pixel at t, we have x (or can get it.)
+
+;;x determines sprite's middle position, sprite
+;;is 3 wide.
+
+;;For any given t, is the pixel # or . ?
+;;  for a given t, {:t n {:state {:x k}}}
+;;  is (mod t 39) in the interval [k-1 k+1] ?
+
+;;40 points per line.
+;;init at x = 1.
+;;0..39 coordinate space.
+;;so t - 1.
+(defn visible? [t x]
+  (let [pos (mod (dec t) 40)] ;;position in screen space.
+    (and (>= pos (- x 1))
+         (<= pos (+ x 1)))))
+
+(defn expand-signal [xs]
+  (let [final (atom nil)]
+    (-> (->> xs
+             (partition 2 1)
+             (mapcat (fn [[l r]]
+                       (reset! final r)
+                       (let [rt (r :t)
+                             lt (l :t)
+                             dt (- rt lt)]
+                         (map (fn [t] (assoc l :t t)) (range lt (+ dt lt))))))
+             vec)
+        (conj @final))))
+
+(defn get-pixels [xs]
+  (->> xs
+       expand-signal
+       (map (fn [r]
+              (if (visible? (r :t) (-> r :state :x))
+                "#" ".")))
+       (partition 40)
+       (map vec)))
+
+
+##..##..##..##..##..##..##..##..##..##.#
+##..##..##..##..##..##..##..##..##..##..
