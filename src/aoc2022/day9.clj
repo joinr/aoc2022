@@ -18,7 +18,7 @@ R 2")
   (->> txt
        clojure.string/split-lines
        (map (fn [x] (let [[c n] (clojure.string/split x #" ")]
-                      {:dir (keyword c) :steps (parse-long n)})))))
+                      [(keyword c) (parse-long n)])))))
 
 ;;observation: any time the head an tail are "touching", we
 ;;can move the head.  That means there is a neighborhood
@@ -34,30 +34,38 @@ R 2")
 
 (def diag #{:UL :UR :DL :DR})
 
-(defn step [dir [hx hy] n]
-  (case dir
-    :R  [(+ hx n)  hy]
-    :L  [(- hx n)  hy]
-    :U  [hx  (+ hy n)]
-    :D  [hx  (- hy n)]
-    :UR [(+ hx n) (+ hy n)]  ;;we now know diagonals.
-    :DR [(+ hx n) (- hy n)]
-    :UL [(- hx n)  (+ hy n)]
-    :DL [(- hx n)  (- hy n)]))
+(defn step
+  ([dir [hx hy] n]
+   (case dir
+     :R  [(+ hx n)  hy]
+     :L  [(- hx n)  hy]
+     :U  [hx  (+ hy n)]
+     :D  [hx  (- hy n)]
+     :UR [(+ hx n) (+ hy n)]  ;;we now know diagonals.
+     :DR [(+ hx n) (- hy n)]
+     :UL [(- hx n)  (+ hy n)]
+     :DL [(- hx n)  (- hy n)]))
+  ([dir v] (step dir v 1)))
 
-(defn move-tail [dir [hx hy :as h] hprev [tx ty :as t]]
+(defn move-tail [[hx hy :as h] [tx ty :as t]]
   ;;move the tail!
-  (cond (= hx tx) ;;same col, move up
-        (case dir :U
-              [tx (inc ty)]
-              [tx (dec ty)])
-        (= hy ty) ;;same row, move side
-        (case dir :L
-              [(dec tx) ty]
-              [(inc tx) ty])
-        ;;diagonal
-        (not (diag dir)) hprev
-        :else (step dir t 1)))
+  (cond (= hx tx) ;;same col, move vertical
+          (if (< hy ty)
+            (step :D t)
+            (step :U t))
+        (= hy ty) ;;same row, move horizontal
+          (if (< hx tx)
+            (step :L t)
+            (step :R t))
+        ;;diagonals
+        (< hx tx)
+        (if (< hy ty)
+          (step :DL t)
+          (step :UL t))
+        (> hx tx)
+        (if (< hy ty)
+          (step :DR t)
+          (step :UR t))))
 
 (defn tail-moved [[x1 y1] [x2 y2]]
   (cond (= x1 x2) (if (< y1 y2) :U :D)
@@ -74,23 +82,24 @@ R 2")
     (doseq [r (reverse grid)]
       (println r))))
 
-(defn move [{:keys [head tail d] :as state} dir steps]
-  (let [[hx hy] head
-        n 1
-        [nx ny :as hnew]  (step dir head n)
-        dnew (dist hnew tail)
-        new-tail (when (> dnew 1)
-                   (move-tail dir hnew head tail))
-        dcurr (or (when new-tail (dist hnew new-tail))
-                  dnew)
-        res (as-> state it
-              (assoc it :head hnew :d dcurr)
-              (if new-tail
-                (assoc it :tail new-tail :tail-moved (tail-moved tail new-tail))
-                (dissoc it :tail-moved)))]
-    (if (= steps 1)
-      res
-      (recur res dir (unchecked-dec steps)))))
+(defn move
+  ([{:keys [head tail d] :as state} dir]
+   (let [[hx hy] head
+        [nx ny :as hnew]  (step dir head)
+         dnew (dist hnew tail)
+         new-tail (when (> dnew 1)
+                    (move-tail  hnew tail))
+         dcurr (or (when new-tail (dist hnew new-tail))
+                   dnew)]
+     (as-> state it
+       (assoc it :head hnew :d dcurr)
+       (if new-tail
+         (assoc it :tail new-tail :tail-moved (tail-moved tail new-tail))
+         (dissoc it :tail-moved)))))
+  ([state dir n]
+   (if (zero? n)
+     state
+     (recur (move state dir) dir (unchecked-dec n)))))
 
 
 (def init {:head [0 0] :tail [0 0] :d 0})
@@ -98,7 +107,7 @@ R 2")
   (let [current  (atom init)
         do-move! (fn [[dir steps]]
                    (swap! current move dir steps))]
-    (->> (for [{:keys [dir steps]} xs]
+    (->> (for [[dir steps] xs]
            (repeat steps [dir 1]))
          (apply concat)
          (map do-move!))))
@@ -111,35 +120,6 @@ R 2")
        (map :tail)
        distinct
        count))
-
-;;we can naively simulate 9 dependent walks.
-;;Instead of one tail, we have a vector of tails.
-;;The big change is that tails can move diagonally to catch up to predecessors.
-
-;;So if the tail moved diagonally, we may like to record which direction
-;;the tail moved as part of the state.
-
-;;This allows us to pass information down to other tails,
-;;and gives us a simpler movement enforcement.
-
-(defn follow [parent-walk]
-  (->> parent-walk
-       (keep :tail-moved)
-       (map (fn [dir] {:dir dir :steps 1}))
-       (walk init)))
-
-;;more work, no filtering.
-(defn follow-debug [parent-walk]
-  (->> parent-walk
-       (map (fn [dir] {:dir dir :steps 1}))
-       (walk init)))
-
-(defn follow-n [n parent-walk]
-  (loop [idx 0
-         acc parent-walk]
-    (if (= idx n)
-      acc
-      (recur (unchecked-inc idx) (follow acc)))))
 
 ;;given an init, we can generate n children.
 ;;we already get 1.
@@ -159,10 +139,17 @@ R 2")
                [ks dir steps])
        first))
 
+(defn pulls [ks mvs]
+  (let [acc (atom ks)]
+    (->> mvs
+         (mapcat (fn [[dir steps]]
+                   (repeat steps [dir 1])))
+         (map (fn [[dir step]]
+                (swap! acc pull dir step))))))
 
 (defn coords [ks]
-  (->> ks
-       (mapv :head)))
+  (-> (->> ks (mapv :head))
+      (conj (-> ks peek :tail))))
 
 (defn render [w h ks]
   (let [grid (vec (for [rows (range h)]
@@ -189,11 +176,10 @@ L 25
 U 20")
 
 (defn solve-9b []
-  (->> #_#_(io/resource "day9input.txt")
+  (->> (io/resource "day9input.txt")
        slurp
-       sample2
        parse
-       (knots 9)
-       (map :tail)
-       #_#_distinct
+       (pulls (knots 9))
+       (map #(-> % (nth 8) :tail))
+       distinct
        count))
