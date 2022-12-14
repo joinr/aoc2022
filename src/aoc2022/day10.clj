@@ -282,5 +282,11 @@ noop")
        (map vec)))
 
 
-##..##..##..##..##..##..##..##..##..##.#
-##..##..##..##..##..##..##..##..##..##..
+(defn solve-9b []
+  (doseq [row (->> (io/resource "day10input.txt")
+                   slurp
+                   parse
+                   discrete-values
+                   expand-signal
+                   get-pixels)]
+    (println (apply str row))))

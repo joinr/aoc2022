@@ -34,7 +34,8 @@ Monkey 3:
   (let [arg (clojure.edn/read-string arg)]
     (case arg
       'old (case op
-             "*" (fn sqr  [n] (* n n ))
+             "*" (fn sqr  [n] (try (* n n )
+                                   (catch Exception e (throw (ex-info "can't square!" {:in n})))))
              "+" (fn dbl  [n] (+ n n)))
       (case op
         "*" (fn mult [n] (* n arg))
@@ -52,12 +53,10 @@ Monkey 3:
                             (clojure.edn/read-string))
                :op  (let [phrase (re-find #"new = old . ([0-9]+|old)" op)
                           [_ _ _ op arg] (clojure.string/split (first phrase) #" " )]
-                     (as-op op arg))
-               :test (let [divisor  (->> test
-                                        (re-find #"[0-9]+")
-                                        clojure.edn/read-string)]
-                       (fn divisible [n]
-                         (zero? (rem n divisor))))
+                      (as-op op arg))
+               :test (->> test
+                          (re-find #"[0-9]+")
+                          clojure.edn/read-string)
                :t (->> t (re-find #"[0-9]+")  parse-long)
                :f (->> f (re-find #"[0-9]+")  parse-long)}))))
 
@@ -69,39 +68,43 @@ Monkey 3:
        (mapv parse-monkey)
        (into [])))
 
-(def divisor (atom 3))
 
 (defn do-monkey [{:keys [items op test t f]}]
   (map (fn [n]
-         (let [wl (quot (op n) @divisor)]
-           [wl (if (test wl)
+         (let [wl (quot (op n) 3)]
+           [wl (if (zero? (rem wl test))
                    t
                    f)])) items))
 
-(defn do-round [ms]
-  (reduce-kv (fn [acc idx _]
-               (let [monkey (acc idx)
-                     new-items (do-monkey monkey)
-                     new-monkey (->  monkey
-                                     (update :seen + (count (monkey :items)))
-                                     (assoc  :items []))]
-                 (reduce (fn finalize [acc [item tgt]]
-                           (update-in acc [tgt :items] conj item))
-                         (assoc acc idx new-monkey) new-items)))
-             ms ms))
+(defn do-round
+  ([f ms]
+   (reduce-kv (fn [acc idx _]
+                (let [monkey (acc idx)
+                      new-items (f monkey)
+                      new-monkey (->  monkey
+                                      (update :seen + (count (monkey :items)))
+                                      (assoc  :items []))]
+                  (reduce (fn finalize [acc [item tgt]]
+                            (update-in acc [tgt :items] conj item))
+                          (assoc acc idx new-monkey) new-items)))
+              ms ms))
+  ([ms] (do-round do-monkey ms)))
 
-(defn rounds [ms]
-  (iterate do-round ms))
+(defn rounds
+  ([f ms] (iterate #(do-round f %) ms))
+  ([ms]  (rounds do-monkey ms)))
 
-(defn monkey-business [n ms]
-  (->> ms
-       rounds
-       (take (inc n))
-       last
-       (map :seen)
-       (sort-by -)
-       (take 2)
-       (reduce *)))
+(defn monkey-business
+  ([n ms] (monkey-business n do-monkey ms))
+  ([n f ms]
+   (->> ms
+        (rounds f)
+        (take (inc n))
+        last
+        (map :seen)
+        (sort-by -)
+        (take 2)
+        (reduce *))))
 
 (defn solve-11a []
   (->> (io/resource "day11input.txt")
@@ -109,9 +112,22 @@ Monkey 3:
        parse
        (monkey-business 20)))
 
+;;ugh, modular arithmetic.  not happy.
+(defn mod-monkey [sm {:keys [items op test t f]}]
+  (map (fn [n]
+         (let [n  (mod n sm)
+               wl (mod (op n) sm)]
+           [wl (if (zero? (mod wl test))
+                 t
+                 f)])) items))
+
 (defn solve-11b []
-  (reset! divisor 1)
-  (->> (io/resource "day11input.txt")
-       slurp
-       parse
-       (monkey-business 10000)))
+  (let [monks (->> (io/resource "day11input.txt")
+                   slurp
+                   parse)
+        sm   (->> monks (map :test) (reduce *))
+        f  (fn [m] (mod-monkey sm m))]
+    (monkey-business 10000 f monks)))
+
+
+
